@@ -14,18 +14,6 @@ This project was developed to solve the challenge of processing long-form Thai f
 
 It utilizes **Typhoon ASR** for high-accuracy Thai speech recognition and **Gemini Flash** for context-aware text processing, wrapped in a robust Python script that implements agentic logic (Self-Correction & Verification).
 
-## 🚀 Key Features
-
-* **🧠 Agentic Correction Workflow:** Implements a loop that doesn't just transcribe, but actively verifies and corrects financial terms using a local Knowledge Base.
-* **⚡ Adaptive Chunking Strategy:** Automatically adjusts processing logic based on video duration:
-    * *Short (< 30 min):* High-speed concurrent processing.
-    * *Long (> 1 hr):* Stability-focused sequential processing to prevent API rate limits.
-* **🛡️ Smart Entity Verification:**
-    * **Fuzzy Matching:** Corrects ASR errors (e.g., "HIKOM" -> "THCOM") using `TheFuzz`.
-    * **Contextual Safety:** Filters out false positives (e.g., confusing "Citi" bank with "CI" stock).
-* **🔗 Context-Aware Processing:** Handles long videos by passing the "previous context" to the LLM in chunks, ensuring sentences aren't cut off and the narrative remains fluid.
-* **📊 Infographic-Ready Summary:** Outputs a structured Markdown summary highlighting Market Overview, Top Gainers/Losers, and Strategy.
-
 ## 🛠️ Tech Stack
 
 * **ASR Engine:** [Typhoon Audio API](https://opentyphoon.ai/) (Realtime Thai ASR)
@@ -62,3 +50,4 @@ Run the script via command line by providing a YouTube URL:
 
 ```bash
 python main.py --url "[https://www.youtube.com/watch?v=YOUR_VIDEO_ID](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)"
+
