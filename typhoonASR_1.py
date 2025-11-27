@@ -8,7 +8,7 @@ from pydub import AudioSegment
 # ---------------- CONFIG ----------------
 
 BASE_URL = "https://api.opentyphoon.ai/v1"
-API_KEY = "sk-vCE2QnUydpGnzic35kI3IcoTsAeWzb2X3jYCCAXDPmfT2JnN"
+API_KEY = ""
 
 LOCAL_AUDIO_FILE = "soundtest2/วิเคราะห์หุ้นรายวัน_06_10_2568.mp3"
 YOUTUBE_URL = "https://www.youtube.com/watch?v=ET8TDclC2O0" 
