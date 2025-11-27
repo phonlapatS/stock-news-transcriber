@@ -13,11 +13,11 @@ import concurrent.futures
 
 # 1. Typhoon ASR (ถอดเสียง - เก่งไทยสุด)
 TYPHOON_BASE_URL = "https://api.opentyphoon.ai/v1"
-TYPHOON_API_KEY = "sk-vCE2QnUydpGnzic35kI3IcoTsAeWzb2X3jYCCAXDPmfT2JnN"
+TYPHOON_API_KEY = ""
 
 # 2. Google Gemini (แก้คำผิด - ฉลาดและฟรี)
 GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-GOOGLE_API_KEY = "AIzaSyCkjWUucxzLaRPnuklKxKgYP0fUyQhTwHA"
+GOOGLE_API_KEY = ""
 LLM_MODEL_NAME = "gemini-2.0-flash" 
 
 LOCAL_AUDIO_FILE = "soundtest2/วิเคราะห์หุ้นรายวัน_06_10_2568.mp3"
