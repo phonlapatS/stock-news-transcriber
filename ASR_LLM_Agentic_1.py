@@ -35,10 +35,10 @@ except ImportError:
 
 # ---------------- CONFIGURATION ----------------
 TYPHOON_BASE_URL = "https://api.opentyphoon.ai/v1"
-TYPHOON_API_KEY = "sk-vCE2QnUydpGnzic35kI3IcoTsAeWzb2X3jYCCAXDPmfT2JnN"
+TYPHOON_API_KEY = ""
 
 GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-GOOGLE_API_KEY = "AIzaSyCkjWUucxzLaRPnuklKxKgYP0fUyQhTwHA"
+GOOGLE_API_KEY = ""
 LLM_MODEL_NAME = "gemini-2.0-flash"
 
 YOUTUBE_URL = "https://www.youtube.com/watch?v=opEIqiPzx64"
