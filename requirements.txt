@@ -1,0 +1,12 @@
+httpx
+yt-dlp
+pydub
+tqdm
+langchain-openai
+langchain-core
+langchain-text-splitters
+pydantic
+duckduckgo-search
+yfinance
+thefuzz
+python-levenshtein
