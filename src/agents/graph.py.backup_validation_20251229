@@ -1,0 +1,961 @@
+# src/agents/graph.py
+from typing import TypedDict, List, Dict, Any
+import os  # For file operations in auto_learning
+import json  # For JSON operations in auto_learning  
+from datetime import datetime  # For timestamps in auto_learning
+
+# Import optional libs
+try:
+    from thefuzz import process as fuzzy_process # type: ignore
+except ImportError:
+    fuzzy_process = None
+
+from langgraph.graph import StateGraph, END
+from src.core.data_managers import StockContextManager, FinanceTermManager, SmartMarketResolver
+from src.agents.llm_prompts import correction_chain, combined_verification_chain, summary_chain  # Re-added
+from src.agents.workflow_logic import process_large_text_robust
+from config import MAX_RETRIES
+
+# Import 3-node validation pipeline (NEW)
+from src.agents.validation_pipeline import (
+    entity_tagger_node,
+    market_validator_node,
+    content_repair_node
+)
+
+# --- State Definition ---
+class AgentState(TypedDict):
+    raw_transcript: str
+    channel_name: str
+    chunk_size: int
+    current_text: str       # Text ล่าสุดที่กำลังแก้
+    feedback_msg: str       # Feedback จากรอบก่อน
+    iteration_count: int    # นับรอบ
+    verified_mappings: List[str]
+    unknown_tickers: List[str]
+    correction_suggestions: List[str] # รายการคำแนะนำการแก้ไขจาก Fact-Checker
+    chunks_with_issues: List[int] # [NEW] เก็บ index ของ chunk ที่มีปัญหา
+    verified_entities_cache: Dict[str, str] # Cache สำหรับเก็บ Entity ที่ตรวจสอบแล้ว (ตัวอย่าง: {"macisen seven": "Magnificent Seven"})
+    # --- 3-Node Pipeline Fields ---
+    extracted_entities: List[Dict] # Output from Entity Tagger: [{'entity': 'PTT', 'price': 35.0, 'type': 'support'}]
+    validated_data: Dict           # Validated data from yfinance: {'PTT': {'market_price': 34.5, 'status': 'mismatch'}}
+    validation_logs: List[str]     # Logs for auto-learning/asr_errors.json
+    # --- Original Fields ---
+    quality_score: int      # คะแนนคุณภาพภาษา (1-10)
+    final_summary: str      # ผลสรุปสุดท้ายในรูปแบบ Markdown
+    data_managers: Dict[str, Any] # Dictionary สำหรับเก็บ instances ของ Manager ต่างๆ
+
+# === HELPER FUNCTION: Ticker Validation ===
+
+def validate_hallucinated_tickers(corrected_text: str, raw_text: str, knowledge_base: dict) -> tuple:
+    """
+    ตรวจสอบและลบ ticker ที่ LLM สร้างขึ้นโดยไม่มีในไฟล์ต้นฉบับ (hallucination)
+    
+    Args:
+        corrected_text: ข้อความที่ LLM แก้ไขแล้ว
+        raw_text: ข้อความต้นฉบับจาก ASR  
+        knowledge_base: Knowledge base สำหรับตรวจสอบ ticker
+    
+    Returns:
+        tuple: (validated_text, removed_tickers)
+    """
+    import re
+    
+    # หา ticker ทั้งหมดในข้อความ (A-Z 2-6 ตัว)
+    tickers_found = re.findall(r'\b[A-Z]{2,6}\b', corrected_text)
+    
+    # คำที่ไม่ใช่ ticker (skip)
+    common_words = {'SET', 'TFEX', 'USD', 'THB', 'CEO', 'CFO', 'IPO', 'THE', 'AND', 'FOR', 'NOT', 'BUT'}
+    
+    removed_tickers = []
+    validated_text = corrected_text
+    
+    for ticker in set(tickers_found):
+        if ticker in common_words:
+            continue
+        
+        # ตรวจสอบว่า ticker นี้มีอยู่ใน RAW จริงไหม
+        ticker_valid = False
+        
+        # Method 1: เช็ค ticker ตรงๆ
+        if ticker in raw_text.upper():
+            ticker_valid = True
+        
+        # Method 2: เช็คชื่อไทยจาก Knowledge Base
+        ticker_key = f"{ticker}.BK"
+        if ticker_key in knowledge_base:
+            thai_names = knowledge_base[ticker_key]
+            for name in thai_names:
+                if name.lower() in raw_text.lower():
+                    ticker_valid = True
+                    break
+        
+        # ถ้าไม่มีในต้นฉบับ → ลบออก
+        if not ticker_valid:
+            # ลบ ticker และใส่ [?] แทน  
+            validated_text = re.sub(
+                r'\b' + ticker + r'\b',
+                '[?]',
+                validated_text
+            )
+            removed_tickers.append(ticker)
+    
+    return validated_text, removed_tickers
+
+# === AGENT GRAPH NODES ===
+
+def correction_node(state: AgentState):
+    """
+    Node: นักแก้ไข (Editor)
+
+    ทำหน้าที่รับข้อความ (current_text) และข้อเสนอแนะ (feedback_msg) จากสถานะปัจจุบัน
+    แล้วส่งให้ LLM (correction_chain) ทำการแก้ไขและเรียบเรียงข้อความใหม่ให้สละสลวยและถูกต้อง
+    โดยใช้ Context จาก StockContextManager และ FinanceTermManager เพื่อเพิ่มความแม่นยำ
+    ในการแก้ไขศัพท์เฉพาะทาง
+
+    Args:
+        state (AgentState): สถานะปัจจุบันของ Graph
+
+    Returns:
+        dict: อัปเดตสถานะด้วย 'current_text' ที่แก้ไขแล้ว และเพิ่ม 'iteration_count'
+    """
+    print(f"\n🔄 [Node] Correction (Round {state['iteration_count'] + 1})...")
+    # ดึง Manager ที่เกี่ยวข้องจาก State มาใช้งาน
+    ctx_mgr = state["data_managers"]["stock_context"]
+    term_mgr = state["data_managers"]["finance_term"]
+    rate_limiter = state.get("rate_limiter")  # Get rate limiter if available
+    
+    # [NEW] Apply pre-processing before LLM (if not already done)
+    current_text = state["current_text"]
+    if state['iteration_count'] == 0:  # Only on first iteration
+        try:
+            from src.utils.preprocessor import TextPreprocessor
+            preprocessor = TextPreprocessor()
+            current_text, _ = preprocessor.preprocess(current_text, verbose=False)
+            
+            # Apply context-aware resolution
+            from src.utils.context_aware_resolver import ContextAwareResolver
+            context_resolver = ContextAwareResolver(ctx_mgr, term_mgr)
+            current_text, _ = context_resolver.fix_context_blindness(current_text)
+        except Exception as e:
+            print(f"   ⚠️ Pre-processing in correction node failed: {e}")
+    
+    # Load learned errors for continuous learning
+    from src.agents.llm_prompts import get_learned_errors_section
+    learned_errors = get_learned_errors_section()
+
+    # Combine feedback and suggestions
+    feedback = state["feedback_msg"]
+    if state.get("correction_suggestions"):
+        feedback += "\n" + "\n".join(state["correction_suggestions"])
+    
+    corrected = process_large_text_robust(
+        text=current_text,  # Use pre-processed text
+        chain=correction_chain,
+        chunk_size=state["chunk_size"],
+        rate_limiter=rate_limiter,
+        extra_inputs={
+            "sector_context": ctx_mgr.get_sector_prompt_str(),
+            "domain_terms_context": term_mgr.get_prompt_str(),
+            "learned_errors": learned_errors,
+            "feedback_msg": feedback,
+            "channel_name": state["channel_name"]
+        }
+    )
+    
+    # [IMPROVED] Enhanced Deduplication - DISABLED FOR TESTING
+    print("\n🧹 Deduplication...")
+    print("   ⚠️  DEDUP DISABLED - Testing without deduplication")
+    
+    # === NEW: Ticker Validation (Prevent Hallucination) ===
+    print("\n🔍 [Ticker Validation] Checking for hallucinations...")
+    try:
+        # Load knowledge base from data_managers
+        kb_data = {}
+        if "stock_context" in state["data_managers"]:
+            ctx_mgr = state["data_managers"]["stock_context"]
+            if hasattr(ctx_mgr, 'sector_data'):
+                # Flatten sector_data into simple dict
+                for sector, stocks in ctx_mgr.sector_data.items():
+                    if isinstance(stocks, dict):
+                        kb_data.update(stocks)
+        
+        # Validate tickers
+        raw_text = state.get("raw_transcript", "")
+        validated_text, removed_tickers = validate_hallucinated_tickers(
+            corrected_text=corrected,
+            raw_text=raw_text,
+            knowledge_base=kb_data
+        )
+        
+        if removed_tickers:
+            print(f"   ⚠️  Removed {len(removed_tickers)} hallucinated ticker(s): {', '.join(removed_tickers)}")
+            corrected = validated_text
+        else:
+            print("   ✅ No hallucinations detected")
+            
+    except Exception as e:
+        print(f"   ⚠️  Ticker validation failed: {e}")
+    
+    # DISABLED: Comment out all dedup to test if it's causing content loss
+    #try:
+    if False:  # Disabled for testing
+        from src.utils.text_deduplication import remove_duplicate_sentences_smart, remove_chunk_boundary_duplicates
+        from src.utils.dedup_config_manager import DedupConfigManager
+        from src.utils.dedup_marker_processor import remove_duplicates as remove_manual_duplicates
+        
+        # Step 0: Remove MANUAL [DUP] markers from LLM first (User requested)
+        corrected, manual_removed = remove_manual_duplicates(corrected)
+        if manual_removed > 0:
+            print(f"   🧹 Manual [DUP] markers: {manual_removed} sentences removed")
+
+        # Get adaptive thresholds based on content type
+        thresholds = DedupConfigManager.get_thresholds(
+            channel_name=state.get("channel_name", ""),
+            video_title=""  # Could add video_title to state in future
+        )
+        
+        # Step 1: Boundary deduplication FIRST (stricter, exact matches from chunk overlap)
+        corrected, boundary_removed = remove_chunk_boundary_duplicates(
+            corrected, 
+            similarity_threshold=thresholds["boundary"]
+        )
+        if boundary_removed > 0:
+            print(f"   🧹 Boundary dedup: {boundary_removed} duplicate(s) removed (threshold={thresholds['boundary']})")
+        
+        # Step 2: General deduplication SECOND (looser, for other duplicates)
+        corrected, num_removed = remove_duplicate_sentences_smart(
+            corrected, 
+            similarity_threshold=thresholds["general"]
+        )
+        if num_removed > 0:
+            print(f"   🧹 General dedup: {num_removed} duplicate(s) removed (threshold={thresholds['general']})")
+            
+    #except Exception as e:
+    #    print(f"   ⚠️ Deduplication failed (continuing): {e}")
+    
+    # ล้างข้อเสนอแนะเก่าหลังจากใช้งานแล้ว เพื่อไม่ให้ส่งซ้ำในรอบถัดไป
+    # SAFE DEDUPLICATION: Remove exact duplicates only
+    try:
+        from src.utils.safe_dedup import safe_deduplicate
+        
+        print("\n🧹 [Safe Dedup] Removing exact duplicates...")
+        deduplicated_text, dedup_stats = safe_deduplicate(
+            corrected,  # FIX: Use 'corrected' variable
+            max_removal_percent=0.10  # Max 10% removal
+        )
+        
+        if dedup_stats["applied"]:
+            corrected = deduplicated_text  # FIX: Assign back to 'corrected'
+        
+    except Exception as e:
+        print(f"   ⚠️ Dedup error (skipping): {e}")
+    
+    return {
+        "current_text": corrected,  # FIX: Return 'corrected'
+        "iteration_count": state["iteration_count"] + 1,
+        "correction_suggestions": []
+    }
+
+
+def fact_checking_node(state: AgentState):
+    """
+    Node: Fact Checker - ตรวจสอบความถูกต้องของข้อมูล
+    
+    ตรวจสอบ CLEAN output หลังจาก correction แล้วว่า:
+    1. ไม่มีคำต้องห้าม (Fed, etc.)
+    2. ราคามีชื่อหุ้นกำกับ (Price-Ticker Consistency)
+    3. ราคาสอดคล้องกับตลาดจริงหรือไม่ (Market Validation)
+   4. ไม่มี Hallucination
+    
+    ถ้าพบปัญหา จะเพิ่ม feedback เพื่อให้ correction_node แก้ไขในรอบถัดไป
+    """
+    print(f"\n🔍 [Node] Fact Checking...")
+    
+    try:
+        from src.validation.fact_checker import CleanFactChecker
+        
+        checker = CleanFactChecker()
+        
+        # Extract filename from state (for date extraction)
+        filename = state.get('video_metadata', {}).get('title', '')
+        if not filename:
+            # Fallback: try to construct from other metadata
+            filename = state.get('filename', '')
+        
+        result = checker.validate(state["current_text"], filename=filename)
+        
+        # แสดงรายงาน
+        if not result['is_valid']:
+            print("   ❌ Validation Failed!")
+            for error in result['errors'][:3]:  # แสดง 3 รายการแรก
+                print(f"      {error}")
+        else:
+            print("   ✅ Validation Passed!")
+        
+        # แสดง warnings
+        if result['warnings']:
+            print(f"   ⚠️  {len(result['warnings'])} warnings found")
+            for warning in result['warnings'][:2]:  # แสดง 2 รายการแรก
+                print(f"      {warning}")
+        
+        # แสดง market validation stats
+        stats = result['statistics']
+        if stats.get('recording_date'):
+            print(f"   📅 Recording Date: {stats['recording_date']}")
+            print(f"   📊 Market Validated: {stats.get('market_validated', 0)}/{stats.get('ticker_price_pairs', 0)} ticker-price pairs")
+        
+        # บันทึกผลการตรวจสอบ
+        return {
+            "quality_score": 10 if result['is_valid'] else max(1, 10 - len(result['errors'])),
+            "fact_check_passed": result['is_valid'],
+            "fact_check_warnings": len(result['warnings']),
+            "fact_check_errors": len(result['errors']),
+            "market_validation_count": len(result.get('market_validation_issues', []))
+        }
+        
+    except Exception as e:
+        print(f"   ⚠️ Fact checking failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"quality_score": state.get("quality_score", 7)}
+
+
+def auto_learning_node(state: AgentState):
+    """
+    Node: Auto-Learning from Corrections
+    
+    Compares RAW vs CORRECTED text to extract what was fixed,
+    then automatically updates knowledge bases for future use.
+    
+    NOW ALSO: Logs validation issues from market_validator to asr_errors.json
+    
+    This creates a sustainable, self-improving system.
+    """
+    print(f"\n📚 [Node] Auto-Learning...")
+    
+    try:
+        from src.utils.auto_learning_manager import AutoLearningManager
+        
+        raw_text = state.get("raw_transcript", "")
+        corrected_text = state.get("current_text", "")
+        video_id = state.get("video_id", "unknown")
+        validation_logs = state.get("validation_logs", [])
+        validated_data = state.get("validated_data", {})
+        
+        # Initialize manager
+        manager = AutoLearningManager()
+        
+        # 1. Extract corrections (existing)
+        corrections = manager.extract_corrections(raw_text, corrected_text, video_id)
+        
+        if corrections:
+            print(f"   🔍 Found {len(corrections)} corrections to learn")
+            
+            # Update knowledge bases
+            stats = manager.update_knowledge_bases(corrections)
+            
+            total_updates = sum(stats.values())
+            if total_updates > 0:
+                print(f"   ✅ Updated: KB={stats['kb_updates']}, Finance={stats['finance_updates']}, Errors={stats['error_updates']}")
+        else:
+            print(f"   ℹ️ No new patterns to learn from corrections")
+        
+        # 2. Log market validation issues (NEW)
+        if validation_logs or validated_data:
+            print(f"   📝 Logging {len(validation_logs)} validation issues")
+            
+            # Save to asr_errors.json
+            error_entries = []
+            for log in validation_logs:
+                error_entries.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "video_id": video_id,
+                    "error_type": "price_hallucination",
+                    "description": log
+                })
+            
+            # Add price mismatches
+            for ticker, data in validated_data.items():
+                if data.get("status") == "mismatch":
+                    error_entries.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "video_id": video_id,
+                        "error_type": "price_hallucination",
+                        "detected_stock": f"{data['original_name']} ({ticker})",
+                        "asr_price": data.get("asr_price"),
+                        "true_market_price": data.get("market_price"),
+                        "correction_action": "replaced_with_market_price"
+                    })
+            
+            if error_entries:
+                # Append to asr_errors.json
+                errors_path = manager.errors_path
+                existing_errors = []
+                if os.path.exists(errors_path):
+                    try:
+                        with open(errors_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            # Handle both list and dict formats
+                            if isinstance(data, list):
+                                existing_errors = data
+                            elif isinstance(data, dict):
+                                # Convert dict to list format
+                                existing_errors = [data]
+                    except:
+                        pass
+                
+                existing_errors.extend(error_entries)
+                
+                with open(errors_path, 'w', encoding='utf-8') as f:
+                    json.dump(existing_errors, f, ensure_ascii=False, indent=2)
+                
+                print(f"   ✅ Logged {len(error_entries)} errors to asr_errors.json")
+            
+    except Exception as e:
+        print(f"   ⚠️ Auto-learning failed (continuing): {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return state  # Pass through unchanged
+
+
+def targeted_correction_node(state: AgentState):
+    """
+    Node: นักแก้ไขเฉพาะจุด (Targeted Editor)
+
+    ทำงานคล้ายกับ correction_node แต่จะแก้ไขเฉพาะ Chunk ที่มีปัญหาเท่านั้น
+    เพื่อลดเวลาและจำนวน API Request ใน Loop การแก้ไขรอบที่ 2 เป็นต้นไป
+    """
+    print(f"\n🎯 [Node] Targeted Correction (Round {state['iteration_count'] + 1})...")
+    ctx_mgr = state["data_managers"]["stock_context"]
+    term_mgr = state["data_managers"]["finance_term"]
+    rate_limiter = state.get("rate_limiter") # Get RateLimiter
+    
+    # แปลง feedback เป็นข้อความ และเพิ่มลิสต์ชื่อหุ้นที่ต้องแก้ (ถ้ามี)
+    unknown_tickers = state.get("unknown_tickers", [])
+    chunks_with_issues = state.get("chunks_with_issues", [])
+    if not chunks_with_issues:
+        return {"current_text": state["current_text"], "iteration_count": state["iteration_count"] + 1, "correction_suggestions": [], "chunks_with_issues": []}
+    
+    feedback = state["feedback_msg"]
+    if unknown_tickers:
+        feedback += f" ตัวอย่างชื่อหุ้นที่ผิด: {unknown_tickers}"
+    if state.get("correction_suggestions"):
+        feedback += "\n" + "\n".join(state["correction_suggestions"])
+    
+    # Targeted Correction ต้องระบุ chunk indices ที่ต้องการแก้ใหม่เท่านั้น
+    target_indices = sorted(list(set(chunks_with_issues))) # Ensure unique and sorted indices
+    print(f"   ... Targeting chunks at indices: {target_indices}")
+    
+    # Load learned errors
+    from src.agents.llm_prompts import get_learned_errors_section
+    learned_errors = get_learned_errors_section()
+    
+    full_corrected_text = process_large_text_robust(
+        text=state["current_text"],
+        chain=correction_chain,
+        chunk_size=state["chunk_size"],
+        rate_limiter=rate_limiter,
+        extra_inputs={
+            "sector_context": ctx_mgr.get_sector_prompt_str(),
+            "domain_terms_context": term_mgr.get_prompt_str(),
+            "learned_errors": learned_errors,
+            "feedback_msg": feedback,
+            "channel_name": state["channel_name"]
+        }
+    )
+
+    # Step 0: Remove MANUAL [DUP] markers from LLM in targeted mode too
+    try:
+        from src.utils.dedup_marker_processor import remove_duplicates as remove_manual_duplicates
+        full_corrected_text, manual_removed = remove_manual_duplicates(full_corrected_text)
+        if manual_removed > 0:
+            print(f"   🎯 Targeted Manual [DUP] markers: {manual_removed} sentences removed")
+    except Exception as e:
+        print(f"   ⚠️ Targeted manual dedup failed: {e}")
+    
+    return {"current_text": full_corrected_text, "iteration_count": state["iteration_count"] + 1, "correction_suggestions": [], "chunks_with_issues": []}
+
+def fact_check_node(state: AgentState):
+    """
+    Node: นักตรวจสอบข้อเท็จจริง (Fact-Checker)
+
+    ทำหน้าที่ค้นหาและตรวจสอบความถูกต้องของชื่อเฉพาะ (Proper Nouns) ที่ปรากฏในเนื้อหา
+    เช่น ชื่อบุคคล, องค์กร, กองทุน, หรือศัพท์เทคนิคที่อาจถูก ASR ถอดเสียงมาผิด
+
+    การทำงาน (จำลอง):
+    1.  รับรายการ "คำที่ไม่รู้จัก" (Unknown Tickers) มาจาก Verification Node ของรอบก่อนหน้า
+    2.  ตรวจสอบกับ Cache ถาวร (Persistent Cache) ใน Resolver ก่อนเป็นอันดับแรก
+    3.  ถ้าเจอคำที่คล้ายกันใน Cache จะสร้างคำแนะนำการแก้ไขทันที เพื่อลดการเรียกใช้ API ภายนอก
+    4.  หากไม่พบใน Cache จึงจะนำไปค้นหาจากแหล่งข้อมูลภายนอก (เช่น Google Search)
+    5.  สร้างรายการคำแนะนำ (Correction Suggestions) เพื่อส่งให้ Correction Node ในรอบถัดไป
+
+    Args:
+        state (AgentState): สถานะปัจจุบันของ Graph
+
+    Returns:
+        dict: อัปเดตสถานะด้วย 'correction_suggestions' ที่ได้จากการตรวจสอบ
+    """
+    print("   🔍 [Node] Fact-Checking Proper Nouns (with Persistent Cache)...")
+    suggestions = []
+    unknowns = state.get("unknown_tickers", [])
+    resolver = state["data_managers"]["resolver"] # ดึง Resolver ซึ่งมี Cache ถาวรอยู่ภายใน
+
+    if not unknowns:
+        return {"correction_suggestions": []}
+
+    for unknown in unknowns:
+        # 1. ตรวจสอบกับ Cache ถาวรใน Resolver ก่อน
+        # ใช้ resolver.resolve() ซึ่งภายในมีการทำ Fuzzy Matching กับ Cache อยู่แล้ว
+        cached_correction = resolver.resolve(unknown)
+        
+        if cached_correction:
+            # ถ้าเจอใน Cache ให้สร้างคำแนะนำจาก Cache และข้ามไปทำคำถัดไป
+            clean_ticker = cached_correction.replace(".BK", "")
+            suggestions.append(f"- แนะนำให้แก้ไข: '{unknown}' อาจหมายถึง '{clean_ticker}' (อ้างอิงจาก Cache ที่เคยตรวจสอบแล้ว)")
+            continue
+
+        # 2. ส่วนนี้คือส่วนที่จะไป Search Google (หากไม่พบใน Cache)
+        # สมมติว่าค้น Google แล้วเจอ
+        if "macisen" in unknown.lower():
+             suggestions.append("- แนะนำให้แก้ไข: 'Macisen Seven' อาจหมายถึง 'Magnificent Seven' (อ้างอิงจาก Web Search)")
+
+    print(f"   ... Fact-Checker Suggestions: {suggestions}")
+    return {"correction_suggestions": suggestions}
+
+def verification_node(state: AgentState):
+    """
+    Node: Combined Verification (NER + Quality)
+    FREE TIER MODE: Sample-based verification (1 chunk only)
+    """
+    print("   🔍 [Node] Sample Verification (FREE TIER)...")
+    resolver = state["data_managers"]["resolver"]
+    current_cache = state.get("verified_entities_cache", {})
+
+    try:
+        from src.core.utils import split_text_smart
+        from src.agents.llm_prompts import combined_verification_chain
+        
+        chunks = split_text_smart(state["current_text"], state["chunk_size"])
+        
+        # FREE TIER: Sample only 1 chunk (middle chunk)
+        if chunks:
+            sample_idx = len(chunks) // 2  # Middle chunk most representative
+            sample_chunk = chunks[sample_idx]
+            print(f"   ⚡ Sampling chunk {sample_idx+1}/{len(chunks)} (saved {len(chunks)-1} requests)")
+        else:
+            sample_chunk = state["current_text"][:3000]
+            print(f"   ⚡ Using first 3000 chars as sample")
+        
+        # Single API call for both NER and quality
+        result = combined_verification_chain.invoke({
+            "text": sample_chunk,
+            "text_sample": sample_chunk
+        })
+        
+        entities = result.entities if hasattr(result, 'entities') else result.get("entities", [])
+        quality_score = result.quality_score if hasattr(result, 'quality_score') else result.get("quality_score", 10)
+        quality_reason = result.quality_reason if hasattr(result, 'quality_reason') else result.get("quality_reason", "OK")
+        sample_chunk_index = sample_idx if chunks else 0
+        
+        print(f"   ✅ Found {len(entities)} entities, Quality: {quality_score}/10")
+    except Exception as e:
+        print(f"   ⚠️ Verification error: {e}")
+        entities = []
+        quality_score = 6  # FREE TIER: Lower threshold
+        quality_reason = "Error"
+        sample_chunk_index = 0
+
+    valid_mappings = []
+    unknowns_map = {} # ใช้ dict เพื่อเก็บว่าเจอ unknown ที่ chunk ไหน
+    current_cache = state.get("verified_entities_cache", {}).copy()
+    seen = set()
+    
+    for ent in entities:
+        if ent.text_found in seen: continue
+        seen.add(ent.text_found)
+        tk = resolver.resolve(ent.text_found)
+        if tk:
+            clean_tk = tk.replace(".BK", "")
+            valid_mappings.append(f"- {ent.text_found} -> {clean_tk}")
+            # เพิ่ม/อัปเดต Cache ด้วยคำที่ถูกต้อง
+            current_cache[ent.text_found.lower()] = clean_tk
+        else:
+            # TODO: Implement logic to find the chunk index where the entity was found.
+            # This is a placeholder for future development.
+            unknowns_map[ent.text_found] = 0 # สมมติว่าเจอที่ chunk 0
+    
+    unknowns = list(unknowns_map.keys())
+    chunks_with_issues = list(set(unknowns_map.values()))
+            
+    if unknowns:
+        feedback = f"คำเตือนจาก Auditor: พบชื่อหุ้นที่ไม่รู้จัก: {unknowns}. โปรดตรวจสอบและแก้ไข."
+    elif quality_score < 8:
+        feedback = f"คำแนะนำจาก Auditor: คุณภาพภาษายังไม่ดีพอ (คะแนน {quality_score}/10). เหตุผล: '{quality_reason}'. โปรดเรียบเรียงใหม่ให้สละสลวยขึ้น"
+        if sample_chunk_index not in chunks_with_issues:
+            chunks_with_issues.append(sample_chunk_index)
+    else:
+        feedback = "Auditor: คุณภาพถูกต้องแล้ว"
+
+    print(f"   ... Auditor Feedback: {feedback}")
+    return {
+        "unknown_tickers": unknowns,
+        "chunks_with_issues": chunks_with_issues,
+        "verified_mappings": valid_mappings,
+        "feedback_msg": feedback,
+        "quality_score": quality_score,
+        "verified_entities_cache": current_cache # ส่ง cache ที่อัปเดตแล้วกลับเข้าระบบ
+    }
+
+def summary_node(state: AgentState):
+    """
+    Node: นักสรุป (Reporter/Summarizer)
+
+    เป็น Node สุดท้ายในกรณีที่การแก้ไขเสร็จสมบูรณ์
+    ทำหน้าที่รับ 'current_text' ที่ผ่านการแก้ไขทั้งหมดแล้ว
+    และส่งให้ LLM เพื่อสร้างบทสรุปในรูปแบบ Markdown
+    
+    ===== FIX: Added anti-repetition controls =====
+
+    Args:
+        state (AgentState): สถานะปัจจุบันของ Graph
+
+    Returns:
+        dict: อัปเดตสถานะด้วย 'final_summary'
+    """
+    print("\n📝 [Node] Generating Summary...")
+    
+    try:
+        # ===== FIX: Use summary_chain with .bind() for parameters =====
+        from src.agents.llm_prompts import summary_chain
+        
+        # Bind anti-repetition parameters to the LLM
+        controlled_chain = summary_chain.with_config(
+            configurable={
+                "llm_temperature": 0.3,       # Lower randomness
+                "llm_max_tokens": 3000,       # Hard limit
+            }
+        )
+        
+        # Prepare inputs
+        mapping_str = "\n".join(state["verified_mappings"])
+        
+        # Invoke with controlled parameters
+        summary = controlled_chain.invoke({
+            "corrected_text": state["current_text"],
+            "mapping_str": mapping_str,
+            "sector_context": state["data_managers"]["stock_context"].get_sector_prompt_str(),
+            "channel_name": state["channel_name"]
+        })
+        
+        final_summary = summary if isinstance(summary, str) else str(summary)
+        
+        # ===== FIX: Detect bulk repetition and warn =====
+        lines = [l.strip() for l in final_summary.split('\n') if l.strip()]
+        if len(lines) > 0:
+            from collections import Counter
+            line_freq = Counter(lines)
+            most_common = line_freq.most_common(1)[0]
+            if most_common[1] > 10:  # Same line repeated 10+ times
+                print(f"   ⚠️  WARNING: Detected {most_common[1]}x repetition!")
+                print(f"      Line: {most_common[0][:60]}...")
+                # Apply aggressive dedup if needed
+                from src.utils.safe_dedup import safe_deduplicate
+                final_summary, stats = safe_deduplicate(final_summary, max_removal_percent=0.50)
+                print(f"   🔧 Applied aggressive dedup (removed {stats.get('removed_sentences', 0)} lines)")
+        
+        return {"final_summary": final_summary}
+    
+    except Exception as e:
+        error_str = str(e)
+        is_quota_error = ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str)
+        
+        if is_quota_error:
+            print("      ⚠️ Quota exceeded during summary generation.")
+            print("      📝 Using fallback: Returning cleaned text as-is.")
+            # Fallback: Return cleaned text formatted as basic markdown
+            fallback_summary = f"# สรุปเนื้อหา - {state['channel_name']}\n\n"
+            fallback_summary += "_⚠️ หมายเหตุ: ไม่สามารถสร้างบทสรุปได้เนื่องจาก API Quota หมด ข้อมูลด้านล่างเป็นข้อความที่ผ่านการแก้ไขแล้ว_\n\n"
+            fallback_summary += "## เนื้อหาทั้งหมด\n\n"
+            fallback_summary += state["current_text"]
+            return {"final_summary": fallback_summary}
+        else:
+            print(f"      ❌ Unexpected error during summary: {e}")
+            # Generic fallback
+            return {"final_summary": f"# Error\n\nไม่สามารถสร้างบทสรุปได้: {e}"}
+
+
+
+
+def price_validation_node(state: AgentState):
+    """
+    Price Validation with Warning Flags (NO AUTO-CORRECTION) - ROBUST
+    
+    Validates stock prices against 52-week high/low and logs warnings.
+    Does NOT modify prices - only flags potential issues.
+    
+    Features:
+    - Parallel API calls for performance
+    - Thread-safe logging
+    - Proper error handling
+    - NO auto-correction
+    """
+    print("\n⚠️  [Price Validation] Checking prices against market data...")
+    
+    summary_text = state.get("final_summary", "")
+    
+    if not summary_text or len(summary_text) < 100:
+        print("   ℹ️  Summary too short, skipping validation")
+        return {}  # Return empty dict (no state mutation)
+    
+    try:
+        from src.utils.market_validator import MarketPriceValidator
+        from src.utils.price_validation_logger import PriceValidationLogger
+        
+        # Initialize validator and logger
+        validator = MarketPriceValidator()
+        logger = PriceValidationLogger()
+        
+        # Validate prices (parallel, robust)
+        result = validator.validate_with_warnings(summary_text, max_workers=10)
+        
+        stats = result['stats']
+        print(f"   📊 Checked: {stats['checked']} prices, Warnings: {stats['warnings']}, Errors: {stats['errors']}")
+        
+        if not result['has_warnings']:
+            print("   ✅ All prices within reasonable range (52-week ±10%)")
+            return {}  # No warnings, return empty dict
+        
+        # Log warnings (thread-safe)
+        video_id = state.get('video_id', 'unknown')
+        video_title = state.get('video_metadata', {}).get('title', '')
+        
+        logger.log_warnings(
+            warnings=result['warnings'],
+            video_id=video_id,
+            video_title=video_title
+        )
+        
+        # Display warnings
+        print(f"\n   ⚠️  {len(result['warnings'])} price warnings detected:")
+        for warning in result['warnings'][:3]:  # Show first 3
+            print(f"      • {warning['ticker']}: {warning['message']}")
+        
+        if len(result['warnings']) > 3:
+            print(f"      ... and {len(result['warnings']) - 3} more")
+        
+        # CRITICAL: Return dict of state updates, don't mutate state directly
+        return {
+            "price_warnings": result['warnings'],  # Store in state
+            "price_validation_stats": stats
+        }
+        
+    except Exception as e:
+        print(f"   ❌ Price validation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}  # Fail gracefully, don't crash
+
+    """
+    NEW: Market-Aware Summary Correction
+    ตรวจสอบ SUMMARY ด้วย yfinance และแก้ไขราคาที่ผิดพลาดก่อนส่ง output
+    
+    Workflow:
+    1. ตรวจสอบราคาใน summary กับ market data (15% tolerance)
+    2. ถ้าผิด → สร้าง hints (phonetic + market constraints)
+    3. ขอให้ LLM สร้าง summary ใหม่ด้วย hints
+    4. ออก final summary ที่ถูกต้อง
+    """
+    print("\n💹 [Post-Summary] Market Validation & Correction...")
+    
+    summary_text = state.get("final_summary", "")
+    
+    if not summary_text or len(summary_text) < 100:
+        print("   ⚠️ Summary too short, skipping market validation")
+        return {}
+    
+    try:
+        from src.utils.market_validator import MarketPriceValidator
+        
+        # Extract date from video (parse from title, not recording_date)
+        video_date = None
+        
+        # Try to get from video_metadata
+        video_title = state.get('video_metadata', {}).get('title', '')
+        
+        if video_title:
+            # Parse date from title (e.g., "LIB Tech Talks วันที่ 03 ธ.ค. 2568")
+            from src.validation.fact_checker import CleanFactChecker
+            checker = CleanFactChecker()
+            video_date = checker.extract_date_from_filename(video_title)
+        
+        # Fallback to upload_date
+        if not video_date:
+            upload_date = state.get('video_metadata', {}).get('upload_date')
+            if upload_date:
+                video_date = upload_date[:10] if len(upload_date) >= 10 else upload_date
+        
+        # Last resort: use today (should rarely happen)
+        if not video_date:
+            from datetime import datetime
+            video_date = datetime.now().strftime("%Y-%m-%d")
+            print(f"   ⚠️ Could not detect video date, using today: {video_date}")
+        else:
+            print(f"   📅 Using video date: {video_date}")
+        
+        validator = MarketPriceValidator()
+        result = validator.validate_prices(summary_text, date=video_date)
+        
+        print(f"   📊 Found {result['total_found']} prices, Validated: {result['validated']}/{result['total_found']}")
+        
+        # ถ้าทุกอย่างถูกต้อง → ผ่าน
+        if not result['errors']:
+            print(f"   ✅ All prices validated (within 15% tolerance)")
+            return {}
+        
+        # มีราคาผิดพลาด → สร้าง correction hints
+        print(f"   ⚠️ {len(result['errors'])} price mismatches detected:")
+        for error in result['errors'][:3]:  # Show first 3
+            print(f"      {error}")
+        
+        # สร้าง hint message สำหรับ LLM (แบบเงียบ - ไม่ต้องบอก)
+        hint_message = "\n\n**PRICE CORRECTION REQUIRED:**\n\n"
+        
+        for error in result['errors']:
+            # Parse error to extract prices
+            import re
+            match = re.search(r'([A-Z]+).*?(\d+\.?\d*) บาท.*?(\d+\.?\d*) บาท', error)
+            if match:
+                ticker = match.group(1)
+                wrong_price = match.group(2)
+                market_price = match.group(3)
+                hint_message += f"- {ticker}: แก้จาก {wrong_price} บาท → เป็น {market_price} บาท\n"
+        
+        hint_message += "\n**IMPORTANT:**\n"
+        hint_message += "1. แก้ไขราคาให้ตรงกับตลาด (tolerance 10-15% สำหรับ ASR error)\n"
+        hint_message += "2. แก้เงียบ ๆ ไม่ต้องเขียน '(Correction:...)' หรือ '(Note:...)' \n"
+        hint_message += "3. summary ควรสะอาด อ่านง่าย ไม่มี alert text\n"
+        
+        print(f"\n   🔄 Re-generating summary with market hints...")
+        
+        # Re-run summary with hints
+        from src.agents.llm_prompts import summary_chain
+        
+        mapping_str = "\n".join(state["verified_mappings"])
+        corrected_summary_prompt = (
+            f"{state['current_text']}\n\n"
+            f"{hint_message}"
+        )
+        
+        corrected_summary = summary_chain.invoke({
+            "corrected_text": corrected_summary_prompt,
+            "mapping_str": mapping_str,
+            "sector_context": state["data_managers"]["stock_context"].get_sector_prompt_str(),
+            "channel_name": state["channel_name"]
+        })
+        
+        final_corrected = corrected_summary.content if hasattr(corrected_summary, 'content') else str(corrected_summary)
+        
+        # POST-PROCESS: Remove any correction notes that LLM added
+        import re
+        # Remove (Correction: ...) notes
+        final_corrected = re.sub(r'\s*\(Correction:.*?\)', '', final_corrected, flags=re.DOTALL)
+        # Remove (Note: ...) notes
+        final_corrected = re.sub(r'\s*\(Note:.*?\)', '', final_corrected, flags=re.DOTALL)
+        
+        print(f"   ✅ Market-corrected summary generated (cleaned)")
+        
+        return {"final_summary": final_corrected}
+        
+    except Exception as e:
+        print(f"   ⚠️ Market correction error (skipping): {e}")
+        return {}  # Keep original summary
+
+
+
+def router(state: AgentState):
+    """
+    Router: FREE TIER MODE
+    Accept lower quality (6/10) to reduce retries
+    """
+    has_unknown = bool(state.get("unknown_tickers", []))
+    has_suggestions = bool(state.get("correction_suggestions", []))
+    quality_too_low = state.get("quality_score", 10) < 6  # FREE TIER: Lowered from 8
+    
+    # OPTIMIZATION: Accept unknown entities after 2 tries
+    if has_unknown and state["iteration_count"] >= 2:
+        print(f"   ⚠️ Accepting {len(state['unknown_tickers'])} unknown entities after 2 tries")
+        has_unknown = False
+    
+    has_issues_to_fix = has_unknown or quality_too_low
+    
+    # Stop if: no issues OR reached max iterations
+    if (not has_issues_to_fix and not has_suggestions) or state["iteration_count"] >= MAX_RETRIES:
+        return "summarize"
+    
+    # Route to targeted correction
+    return "targeted_correct" if state["iteration_count"] > 0 else "correct"
+
+# --- Build Graph ---
+def build_workflow(data_managers: Dict[str, Any]):
+    """
+    สร้างและคอมไพล์ Workflow ของ LangGraph
+
+    ประกอบด้วยการกำหนด Node และ Edge ทั้งหมด:
+    - Entry Point: 'correct'
+    - 'correct' -> 'auto_learning' (เรียนรู้จากการแก้ไข)
+    - 'auto_learning' -> 'fact_check' (ตรวจสอบข้อเท็จจริง)
+    - 'fact_check' -> 'verify' (ตรวจสอบ Ticker และคุณภาพ) 
+    - 'verify' -> 'router' -> (วนกลับไป 'correct'/'targeted_correct' หรือไป 'summarize') 
+    - 'summarize' -> END
+
+    Args:
+        data_managers (Dict[str, Any]): Dictionary ที่เก็บ instance ของ Manager ต่างๆ
+
+    Returns:
+        CompiledGraph: แอปพลิเคชัน LangGraph ที่พร้อมใช้งาน
+    """
+    
+    workflow = StateGraph(AgentState)
+    
+    # 3-Node Validation Pipeline - DISABLED FOR ROLLBACK
+    # workflow.add_node("entity_tagger", entity_tagger_node)
+    # workflow.add_node("market_validator", market_validator_node)
+    # workflow.add_node("content_repair", content_repair_node)
+    
+    # Original nodes
+    workflow.add_node("correct", correction_node)
+    workflow.add_node("auto_learning", auto_learning_node)
+    workflow.add_node("fact_check", fact_checking_node)
+    workflow.add_node("targeted_correct", targeted_correction_node)
+    workflow.add_node("verify", verification_node)
+    workflow.add_node("summarize", summary_node)
+    workflow.add_node("price_validation", price_validation_node)  # ENABLED: Warning-only validation
+    
+    # ROLLBACK: Skip validation, go direct to correction
+    # workflow.set_entry_point("entity_tagger")  # OLD: Started with validation
+    # workflow.add_edge("entity_tagger", "market_validator")
+    # workflow.add_edge("market_validator", "content_repair")
+    workflow.set_entry_point("correct")  # NEW: Direct to correction
+    
+    # Original flow continues
+    workflow.add_edge("correct", "auto_learning")
+    workflow.add_edge("auto_learning", "fact_check")
+    workflow.add_edge("targeted_correct", "fact_check")
+    workflow.add_edge("fact_check", "verify")
+    workflow.add_conditional_edges("verify", router, {
+        "correct": "correct",
+        "targeted_correct": "targeted_correct",
+        "summarize": "summarize"
+    })
+    
+    # Price validation after summary (warning-only)
+    workflow.add_edge("summarize", "price_validation")
+    workflow.add_edge("price_validation", END)
+    
+    # Compile with increased recursion limit
+    app = workflow.compile(checkpointer=data_managers.get("checkpointer"))
+    app.config = {"recursion_limit": 50}  # เพิ่มจาก default 25 เป็น 50
+    
+    return app

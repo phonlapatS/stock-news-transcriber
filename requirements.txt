@@ -1,0 +1,15 @@
+httpx
+yt-dlp
+pydub
+tqdm
+langchain-openai            # Keep for rollback compatibility
+langchain-google-genai      # NEW: Native Gemini with context caching
+google-generativeai         # NEW: Required for caching API
+langchain-core
+langchain-text-splitters
+langgraph                 
+pydantic
+duckduckgo-search
+yfinance
+thefuzz
+python-levenshtein

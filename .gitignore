@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment variables
+.env
+.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific - Output files
+transcripts_output/
+old_transcripts/
+downloads/
+ตรวจงาน/
+
+# Project specific - Backup files
+backups_*/
+
+# Project specific - Cache and logs
+cache/
+logs/
+*.log
+
+# Project specific - Data files
+asr_errors.json
+ticker_cache.json
+knowledge_base.json.backup*
+
+# Gemini AI artifacts
+.gemini/

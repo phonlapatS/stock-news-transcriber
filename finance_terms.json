@@ -1,0 +1,358 @@
+{
+  "Stock Tickers": {
+    "AOT": [
+      "AOT",
+      "ท่าอากาศยาน",
+      "ท่าอากาศยานแห่งประเทศไทย",
+      "Airports of Thailand"
+    ],
+    "KINGPOWER": [
+      "KingPower",
+      "King Power",
+      "จริงพาวเวอร์",
+      "คิงเพาเวอร์",
+      "คิงพาวเวอร์"
+    ],
+    "THAI": [
+      "THAI",
+      "การบินไทย",
+      "Thai Airways"
+    ],
+    "DOW_JONES": [
+      "Dow Jones",
+      "ดาว โจนส์",
+      "ดาวโจนส์",
+      "Datao",
+      "ดาเทา"
+    ],
+    "NASDAQ": [
+      "Nasdaq",
+      "แนสแด็ก",
+      "นาสแด็ก"
+    ],
+    "DELTA": [
+      "DELTA",
+      "เดลต้า",
+      "Delta Electronics"
+    ],
+    "ICHI": [
+      "ICHI",
+      "อิชิตัน"
+    ],
+    "EGCO": [
+      "EGCO",
+      "อีจีโค่",
+      "Electricity Generating"
+    ],
+    "SSP": [
+      "SSP",
+      "เซอร์เซาน์ เพาเวอร์",
+      "Sermsang Power"
+    ],
+    "SECURE": [
+      "SECURE",
+      "Nforce Secure",
+      "เอ็นฟอร์ซ"
+    ],
+    "HANA": [
+      "HANA",
+      "ฮานา ไมโครอิเล็กทรอนิกส์"
+    ],
+    "KCE": [
+      "KCE",
+      "เคซีอี อิเล็กทรอนิกส์"
+    ],
+    "XPG": [
+      "XPG",
+      "Xspring Capital",
+      "เอ็กซ์สปริง"
+    ],
+    "SPA": [
+      "SPA",
+      "Siam Retail Group",
+      "สยามรีเทลกรุ๊ป"
+    ]
+  },
+  "Power Plant Projects": {
+    "APEX": [
+      "APEX"
+    ],
+    "CDI": [
+      "CDI"
+    ],
+    "QPL": [
+      "QPL"
+    ]
+  },
+  "Indices": {
+    "SET Index": [
+      "set index",
+      "ดัชนีเซต",
+      "ดัชนี SET",
+      "เซ็ตอินเด็กซ์",
+      "เซ็ตเด็ก",
+      "เซทเด็ก",
+      "เซนเด็ก",
+      "เซ็นเด็ก",
+      "เซ็ดเด็ก"
+    ]
+  },
+  "Crypto & Digital Assets": {
+    "SiriHub Token": [
+      "SiriHub Token",
+      "โทเค็นสิริฮับ"
+    ],
+    "G-Token": [
+      "G-Token",
+      "จีโทเค็น"
+    ],
+    "ICO": [
+      "ICO",
+      "Initial Coin Offering"
+    ],
+    "Investment Token": [
+      "Investment Token",
+      "โทเค็นลงทุน"
+    ]
+  },
+  "Technical Terms": {
+    "YoY": [
+      "ปีต่อปี",
+      "เทียบกับปีก่อน",
+      "เมื่อเทียบกับปีที่แล้ว"
+    ],
+    "QoQ": [
+      "เทียบกับไตรมาสก่อน",
+      "คิวก่อนหน้า",
+      "ไตรมาสก่อน"
+    ],
+    "HoH": [
+      "HoH",
+      "Half on Half",
+      "ครึ่งปีต่อครึ่งปี"
+    ],
+    "3QTD": [
+      "3QTD",
+      "Quarter to Date ไตรมาส 3"
+    ],
+    "Guidance": [
+      "Guidance",
+      "แนวทางการคาดการณ์",
+      "เป้าหมาย"
+    ],
+    "Same Store Sales": [
+      "Same Store Sales",
+      "ยอดขายในสาขาเดิม"
+    ],
+    "Analyst Day": [
+      "Analyst Day",
+      "งานนำเสนอนักวิเคราะห์"
+    ],
+    "Q1": [
+      "ไตรมาสหนึ่ง",
+      "ไตรมาส 1",
+      "คิวหนึ่ง"
+    ],
+    "Q2": [
+      "ไตรมาสสอง",
+      "ไตรมาส 2",
+      "คิวสอง"
+    ],
+    "Q3": [
+      "ไตรมาสสาม",
+      "ไตรมาส 3",
+      "คิวสาม"
+    ],
+    "Q4": [
+      "ไตรมาสสี่",
+      "ไตรมาส 4",
+      "คิวสี่"
+    ],
+    "Sideway": [
+      "ไซด์เวย์",
+      "ออกข้าง"
+    ],
+    "Technical Rebound": [
+      "เทคนิครีบาวด์",
+      "เด้งสั้น"
+    ],
+    "GPM": [
+      "GPM",
+      "Gross Profit Margin",
+      "อัตรากำไรขั้นต้น"
+    ],
+    "SG&A": [
+      "SG&A",
+      "Selling General Administrative",
+      "ค่าขายและบริหาร"
+    ],
+    "Legal Fee": [
+      "Legal Fee",
+      "ค่าที่ปรึกษากฎหมาย"
+    ],
+    "PPA": [
+      "PPA",
+      "Power Purchase Agreement",
+      "สัญญาซื้อขายไฟฟ้า"
+    ],
+    "Adder": [
+      "Adder",
+      "ค่าพรีเมียม"
+    ],
+    "result": [
+      "result",
+      "paper result",
+      "ผลประกอบการ"
+    ],
+    "ติดแนวต้าน": [
+      "ติดแนวต้าน",
+      "แนวต้าน"
+    ],
+    "Low": [
+      "Low",
+      "หนึ่งบาทนะ"
+    ],
+    "แนวต้านอยู่ที่": [
+      "แนวต้านอยู่ที่",
+      "แนวต้าน"
+    ],
+    "1.05": [
+      "1.05",
+      "แนวรับ"
+    ]
+  },
+  "General Correction": {
+    "Sideway Up": [
+      "ไซด์เวย์อัพ",
+      "Side way up"
+    ],
+    "Double Bottom": [
+      "ดับเบิ้ลบอททอม"
+    ],
+    "Pullback": [
+      "พูลแบ็ค",
+      "Pull back"
+    ],
+    "Throw back": [
+      "โทวแบ็ค"
+    ],
+    "Golden Cross": [
+      "โกลเด้นครอส"
+    ],
+    "Golden Week": [
+      "โกลเด้นวีค"
+    ],
+    "MACD": [
+      "MACD",
+      "แม็ค ดี",
+      "แมคดี",
+      "เอ็ม เอ ซี ดี",
+      "Moving Average Convergence Divergence"
+    ],
+    "RSI": [
+      "RSI",
+      "อาร์เอสไอ",
+      "อาร์ เอส ไอ",
+      "Relative Strength Index"
+    ],
+    "divergence": [
+      "divergence",
+      "ไดเวอร์เจน",
+      "ไดเวอร์เจนซ์",
+      "bearish divergence",
+      "bullish divergence"
+    ],
+    "cut loss": [
+      "cut loss",
+      "คัท ลอส",
+      "จุดตัดขาดทุน",
+      "จุด cut loss"
+    ],
+    "Volume": [
+      "Volume",
+      "โวลุ่ม",
+      "ปริมาณการซื้อขาย",
+      "ปริมาณซื้อขาย"
+    ],
+    "Valuation": [
+      "Valuation",
+      "วาลูเอชั่น",
+      "มูลค่า",
+      "การประเมินมูลค่า"
+    ],
+    "Sentiment": [
+      "Sentiment",
+      "เซนติเมนต์",
+      "ความเชื่อมั่น",
+      "อารมณ์ตลาด"
+    ],
+    "Fund Flow": [
+      "Fund Flow",
+      "กระแสเงินกองทุน",
+      "เงินทุนไหลเข้า"
+    ],
+    "Consensus": [
+      "Consensus",
+      "คอนเซนซัส",
+      "คอน เซน ซัส",
+      "ฉันทามติ"
+    ],
+    "Non-Farm Payrolls": [
+      "Non-Farm Payrolls",
+      "นอนฟาร์ม",
+      "การจ้างงานนอกภาคเกษตร",
+      "ตัวเลขการจ้างงาน"
+    ],
+    "NVIDIA": [
+      "NVIDIA",
+      "เอ็นวิเดีย",
+      "นวีเดีย",
+      "เอ็นวิดีอา"
+    ],
+    "Krungsri Securities": [
+      "Krungsri Securities",
+      "กรุงศรีซีเคียวริตี้ส์",
+      "Krungsri"
+    ]
+  },
+  "Business Segments": {
+    "OEM": [
+      "OEM",
+      "Original Equipment Manufacturer"
+    ],
+    "PCBA": [
+      "PCBA",
+      "Printed Circuit Board Assembly"
+    ],
+    "IC": [
+      "IC",
+      "Integrated Circuit",
+      "ไอซี"
+    ],
+    "PMS": [
+      "PMS",
+      "Power Management System"
+    ],
+    "IF": [
+      "IF",
+      "บริการสุขภาพ"
+    ],
+    "XAM": [
+      "XAM",
+      "Asset Management",
+      "บริหารจัดการกองทุน"
+    ],
+    "Traditional Trade": [
+      "Traditional Trade",
+      "ร้านค้าดั้งเดิม"
+    ],
+    "Hypermarket": [
+      "Hypermarket",
+      "ห้างสรรพสินค้าขนาดใหญ่"
+    ],
+    "Wellness Center": [
+      "Wellness Center",
+      "ศูนย์สุขภาพ"
+    ]
+  }
+}
