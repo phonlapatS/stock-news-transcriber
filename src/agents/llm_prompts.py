@@ -97,15 +97,15 @@ correction_system_prompt = (
     "   - **Context-Awareness:** Distinguish 'Fund' from 'Stock'.\n"
     "     * Rule: If audio says 'กองทุน THAI ESG', DO NOT change to 'TISCO'.\n"
     "\n"
-    "4. **Ticker Conversion (AGGRESSIVE):**\n"
-    "   - **ALWAYS** convert Thai company names to Official Ticker Symbols when confident.\n"
+    "4. **Universal Symbol/Ticker Usage (STRICT):**\n"
+    "   - **ALWAYS** use the official Ticker/Symbol for ALL assets (Stocks, Funds, Crypto, Indices).\n"
+    "   - **NEVER** use full company names (Thai OR English). Use the Symbol instead.\n"
     "   - **Examples:**\n"
-    "     * 'บ้านปู เพาเวอร์' → 'BPP'\n"
-    "     * 'ปตท. น้ำมันและการค้าปลีก' → 'OR'\n"
-    "     * 'ท่าอากาศยานไทย' → 'AOT'\n"
-    "     * 'บีบีแอล' → 'BBL'\n"
-    "   - Use Knowledge Base or context to verify.\n"
-    "   - If uncertain or no ticker exists, keep Thai name.\n"
+    "     * 'บ้านปู เพาเวอร์' OR 'Banpu Power' → 'BPP'\n"
+    "     * 'ท่าอากาศยานไทย' OR 'Airports of Thailand' → 'AOT'\n"
+    "     * 'บิตคอยน์' OR 'Bitcoin' → 'BTC'\n"
+    "     * 'กองทุนรวมโครงสร้างพื้นฐาน...' → 'DIF' (if applicable)\n"
+    "   - If uncertain, keep the name as spoken to avoid error.\n"
     "\n"
     "5. **Sentence Cleanup & Flow:**\n"
     "   - Remove incomplete or fragmented sentences\n"
@@ -186,7 +186,7 @@ correction_prompt = ChatPromptTemplate.from_messages([
     ("user", "<raw_transcript>\n{text_chunk}\n</raw_transcript>\n\n"
              "**CRITICAL REMINDER (Do not forget):**\n"
              "1. **NO SUMMARIZING**: Keep 100% of content.\n"
-             "2. **AGGRESSIVE TICKER CONVERSION**: 'บ้านปู เพาเวอร์' -> 'BPP', 'AOT', 'CPALL'.\n"
+             "2. **USE SYMBOLS ONLY**: 'Bitcoin' -> 'BTC', 'Banpu Power' -> 'BPP'. NO full names.\n"
              "3. **CHECK CONTEXT**: Is this a Fund or a Stock?\n\n"
              "**Action:** Apply Hybrid Correction now:"),
 ])
@@ -211,7 +211,7 @@ combined_verification_system = (
     "1. Are numbers identical? (e.g. '3 บาท' vs 'สามบาท' is OK, but '30 บาท' is NOT)\n"
     "2. Are Ticker symbols correct based on Thai context?\n"
     "3. Are filler words removed?\n"
-    "4. **Ticker Check:** Did the output use Ticker Symbols (e.g., 'BPP') instead of Thai names (e.g., 'บ้านปู เพาเวอร์')? If NOT, flag it as an issue.\n"
+    "4. **Symbol Check:** Did the output use Ticker/Symbols (e.g., 'BPP', 'BTC') for ALL assets? If it used full names (e.g., 'Banpu Power'), FLAG IT.\n"
 )
 
 combined_verification_prompt = ChatPromptTemplate.from_messages([
