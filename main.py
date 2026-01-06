@@ -37,35 +37,32 @@ except ImportError:
     sys.exit(1)
 
 
+
+
+# --- Config Logic ---
 # --- Config Logic ---
 def get_adaptive_config(duration_sec: float) -> dict:
     """
     เลือกชุดการตั้งค่า (Config) ที่เหมาะสมตามความยาวของวิดีโอ (Adaptive 3-Tiers Strategy)
-
-    - Tier 1 (สั้น < 29 นาที): เน้นความเร็วสูง ใช้ Worker เยอะและ Chunk เสียงสั้น
-    - Tier 2 (กลาง 30-60 นาที): เน้นความสมดุลระหว่างความเร็วและความเสถียร
-    - Tier 3 (ยาว > 1 ชั่วโมง): เน้นความปลอดภัย ลด Worker และใช้ Chunk เสียงยาวขึ้นเพื่อลดจำนวนไฟล์
-
-    Args:
-        duration_sec (float): ความยาวของวิดีโอ (วินาที)
-
-    Returns:
-        dict: ชุดการตั้งค่าที่เหมาะสมสำหรับความยาววิดีโอนั้นๆ
+    
+    [FINE-TUNED] ปรับจูนให้เหมาะสมกับข้อจำกัด 1MB ของ API (WAV Format)
+    - Chunk Size: คงไว้ที่ 20s-25s เพื่อความปลอดภัย (ไม่ติด 413)
+    - Max Workers: ปรับตามความยาวคลิปเพื่อไม่ให้ยิง request API จนติด Rate Limit (429)
     """
-    if duration_sec <= 1740: # Tier 1: สั้น (< 29 min) -> เร็ว
+    if duration_sec <= 900: # Tier 1: คลิปสั้น (< 15 นาที)
         return {
-            "CHUNK_DURATION": 45, "OVERLAP_DURATION": 15, "MAX_WORKERS": 5, # ASR
-            "TEXT_CHUNK_SIZE": 8000, "MODE_NAME": "Tier 1: Short-Form (Fast)" # LLM
+            "CHUNK_DURATION": 20, "OVERLAP_DURATION": 5, "MAX_WORKERS": 10, # เร็วสุดๆ
+            "TEXT_CHUNK_SIZE": 8000, "MODE_NAME": "Tier 1: Short-Form (Aggressive Speed)"
         }
-    elif duration_sec <= 3600: # Tier 2: กลาง (30-60 min) -> สมดุล
+    elif duration_sec <= 2700: # Tier 2: คลิปกลาง (15-45 นาที)
         return {
-            "CHUNK_DURATION": 60, "OVERLAP_DURATION": 15, "MAX_WORKERS": 3, # ASR
-            "TEXT_CHUNK_SIZE": 8000, "MODE_NAME": "Tier 2: Medium-Form (Balanced)" # LLM
+            "CHUNK_DURATION": 25, "OVERLAP_DURATION": 5, "MAX_WORKERS": 5, # สมดุล
+            "TEXT_CHUNK_SIZE": 8000, "MODE_NAME": "Tier 2: Medium-Form (Balanced)"
         }
-    else: # Tier 3: ยาว (> 1 hr) -> ปลอดภัย
+    else: # Tier 3: คลิปยาว (> 45 นาที)
         return {
-            "CHUNK_DURATION": 300, "OVERLAP_DURATION": 20, "MAX_WORKERS": 2, # ASR
-            "TEXT_CHUNK_SIZE": 12000, "MODE_NAME": "Tier 3: Long-Form (Safe)" # LLM
+            "CHUNK_DURATION": 25, "OVERLAP_DURATION": 5, "MAX_WORKERS": 3, # ปลอดภัย เน้นเสถียร
+            "TEXT_CHUNK_SIZE": 12000, "MODE_NAME": "Tier 3: Long-Form (Conservative)"
         }
 
 
@@ -73,25 +70,6 @@ def get_adaptive_config(duration_sec: float) -> dict:
 def main(target_url: str):
     """
     ฟังก์ชันหลักสำหรับดำเนินกระบวนการทั้งหมด (Orchestrator)
-
-    ขั้นตอนการทำงาน:
-    1.  **Initialization**: เริ่มต้นระบบ, โหลด Manager ต่างๆ และสร้าง Client สำหรับ ASR
-    2.  **Download & Metadata**: ดึงข้อมูลเมตาเดตาและดาวน์โหลดไฟล์เสียงจาก YouTube URL
-    3.  **ASR Transcription**:
-        - Preprocess ไฟล์เสียงให้อยู่ในรูปแบบที่เหมาะสม (16kHz, Mono)
-        - แบ่งไฟล์เสียงเป็นส่วนๆ (Chunks) แบบมีช่วงทับซ้อน (Overlap)
-        - ส่ง Chunks ไปถอดเสียงแบบขนาน (Parallel) เพื่อความรวดเร็ว
-        - รวมผลลัพธ์การถอดเสียง (Transcript) และจัดการกับส่วนที่อาจล้มเหลว
-    4.  **Agentic Workflow**:
-        - สร้าง Workflow ของ Agent โดยใช้ LangGraph
-        - กำหนดสถานะเริ่มต้น (Initial State) และส่ง Transcript ดิบเข้าไปใน Graph
-        - รัน Graph เพื่อให้ Agent ทำการแก้ไข, ตรวจสอบ, และสรุปผล
-    5.  **Output**:
-        - จัดรูปแบบผลลัพธ์สุดท้าย (Clean Transcript, Summary)
-        - บันทึกผลลัพธ์ทั้งหมดลงในไฟล์ .txt และ .md
-
-    Args:
-        target_url (str): YouTube URL ของวิดีโอที่ต้องการประมวลผล
     """
     # 1. Initialization
     print("🔄 Initializing System...")
@@ -129,10 +107,10 @@ def main(target_url: str):
         "no_warnings": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # ดึงข้อมูลเมตาเดตาของวิดีโอมาก่อน
-            info = ydl.extract_info(target_url, download=False) # download=False เพื่อเอาแค่ข้อมูล
+            info = ydl.extract_info(target_url, download=False)
             video_meta = {
                 "title": info.get("title", "Unknown_Video"),
                 "channel": info.get("uploader", "Unknown_Channel"),
@@ -155,11 +133,14 @@ def main(target_url: str):
                 print(f"    🟢 Audio file already exists. Using cached file: {audio_filename}")
             else:
                 print("    ⬇️  Downloading audio...")
-                ydl.download([target_url]) # ดาวน์โหลดไฟล์ตาม `outtmpl` ที่ตั้งไว้ใน ydl_opts
+                ydl.download([target_url])
 
-        except Exception as e:
-            print(f"❌ Error downloading video: {e}")
-            return
+    except KeyboardInterrupt:
+        print("\n🛑 Download cancelled by user (Ctrl+C).")
+        return
+    except Exception as e:
+        print(f"❌ Error processing video: {e}")
+        return
 
     # Prepare Output Filenames
     safe_title = sanitize_filename(video_meta['title'])
@@ -175,35 +156,55 @@ def main(target_url: str):
         print("❌ Failed to process audio file.")
         return
 
-    print("\n🚀 [Step 3] Transcribing with Typhoon...")
+    print("\n🚀 [Step 3] Transcribing with Typhoon (Stable WAV Mode)...")
     chunk_ms = adaptive_cfg["CHUNK_DURATION"] * 1000
     step = chunk_ms - (adaptive_cfg["OVERLAP_DURATION"] * 1000)
     
     chunks = []
     for chunk_index, start_ms in enumerate(range(0, len(audio), step)):
         buf = io.BytesIO()
+        # [REVERT] กลับไปใช้ wav เพื่อความเข้ากันได้สูงสุด แต่ใช้ chunk เล็ก (20s)
         audio[start_ms : min(start_ms + chunk_ms, len(audio))].export(buf, format="wav")
         chunks.append({"data": buf.getvalue(), "index": chunk_index})
 
     results = {}
     dynamic_prompt = prompt_builder.build_prompt(video_meta)
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=adaptive_cfg["MAX_WORKERS"]) as ex:
+    # [NEW] Graceful Exit Implementation
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=adaptive_cfg["MAX_WORKERS"])
+    try:
         futures = {
-            ex.submit(transcribe_chunk, asr_client, chunk_info["data"], chunk_info["index"], dynamic_prompt): chunk_info["index"]
+            executor.submit(transcribe_chunk, asr_client, chunk_info["data"], chunk_info["index"], dynamic_prompt): chunk_info["index"]
             for chunk_info in chunks
         }
+        
+        # ใช้ tqdm เพื่อแสดง Progress bar
         for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="   Processing Chunks", unit="chunk"):
             idx = futures[future]
             try:
-                # transcribe_chunk จะคืนค่า "" ถ้าล้มเหลวหลัง retry
                 results[idx] = future.result()
             except Exception as e:
                 print(f"\n   ⚠️ Warning: ASR task for chunk {idx} failed unexpectedly: {e}")
-                results[idx] = "" # กำหนดเป็นค่าว่างถ้าเกิด Exception ที่ไม่คาดคิด
+                results[idx] = ""
+
+    except KeyboardInterrupt:
+        print("\n\n🛑 STOPPING: User pressed Ctrl+C. Cancelling all pending tasks...")
+        executor.shutdown(wait=False, cancel_futures=True)
+        print("   ✅ Tasks cancelled. Exiting...")
+        sys.exit(0) # Exit ทันที
+        
+    except Exception as e:
+        print(f"\n❌ Unexpected Error: {e}")
+        executor.shutdown(wait=False)
+        return
+    finally:
+        # Ensure executor clean up
+        executor.shutdown(wait=True)
+
 
     # ประกอบ Transcript พร้อมจัดการส่วนที่ล้มเหลว
     final_transcripts = []
+
     for chunk_index in sorted(results.keys()):
         text = results.get(chunk_index, "")
         final_transcripts.append(text if text else "[--- TRANSCRIPTION FAILED FOR THIS SEGMENT ---]")

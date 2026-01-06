@@ -10,11 +10,11 @@ load_dotenv()
 # ==========================================
 # Typhoon ASR: สำหรับถอดเสียงภาษาไทย
 TYPHOON_BASE_URL = "https://api.opentyphoon.ai/v1"
-TYPHOON_API_KEY = "sk-vCE2QnUydpGnzic35kI3IcoTsAeWzb2X3jYCCAXDPmfT2JnN" 
+TYPHOON_API_KEY = os.getenv("TYPHOON_API_KEY", "") 
 
 # Google Gemini API: สมองหลักของ Agent (Gemini 2.5 Flash - with Key Rotation)
-GROQ_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"  
-GROQ_API_KEY = os.getenv("GEMINI_API_KEY", "")  # Primary key from .env (will be rotated)
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"  
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # Primary key from .env (will be rotated)
 
 # --- LLM Settings ---
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash-lite")
@@ -83,6 +83,6 @@ USE_CONTEXT_CACHING = os.getenv("USE_CONTEXT_CACHING", "False").lower() == "true
 CONTEXT_CACHE_TTL_HOURS = 1      # Gemini limit: 1 hour max
 CONTEXT_CACHE_REFRESH_MINUTES = 55  # Proactive refresh before expiry
 
-# IMPORTANT: Keep GROQ_BASE_URL for backward compatibility
+# IMPORTANT: Keep GEMINI_BASE_URL for backward compatibility
 # Not used when USE_CONTEXT_CACHING=True, but kept for rollback
 

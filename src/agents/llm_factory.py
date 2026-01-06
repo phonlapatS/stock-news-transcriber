@@ -38,7 +38,7 @@ import json
 # Always import standard mode dependencies
 from langchain_openai import ChatOpenAI
 from config import (
-    GROQ_BASE_URL, 
+    GEMINI_BASE_URL, 
     LLM_MODEL_NAME, 
     USE_CONTEXT_CACHING,
     CONTEXT_CACHE_TTL_HOURS,
@@ -104,7 +104,7 @@ def _create_standard_llm():
     current_key = get_current_key()
     
     llm = ChatOpenAI(
-        base_url=GROQ_BASE_URL,
+        base_url=GEMINI_BASE_URL,
         api_key=current_key,
         model=LLM_MODEL_NAME,
         temperature=0.0,  # Deterministic mode for consistency

@@ -354,11 +354,10 @@ def transcribe_chunk(client, chunk_data, chunk_index, prompt):
             # สร้าง BytesIO Object (ไฟล์เสมือนในหน่วยความจำ) จากข้อมูล binary
             file_buffer = io.BytesIO(chunk_data)
             
-            # [FIX] ระบุชื่อไฟล์และนามสกุล (.wav) ให้ชัดเจนใน tuple
-            # Client Library จะใช้ข้อมูลนี้เพื่อตั้งค่า Content-Type เป็น 'audio/wav'
-            # ซึ่งเป็นการแก้ปัญหา 'application/octet-stream not supported'
+            # [FIX] กลับไปใช้ .wav เพื่อความชัวร์ (Stable Strategy)
+            # แก้ปัญหา MIME type error ของ Typhoon (reject audio/mpeg)
             response = client.audio.transcriptions.create(
-                model="typhoon-asr-realtime",  # ใช้ Model สำหรับ Real-time ASR
+                model="typhoon-asr-realtime",
                 file=("audio.wav", file_buffer),  # (filename, file_object)
                 language="th",  # ภาษาไทย
                 prompt=prompt,  # Prompt แนะนำคำศัพท์/บริบท

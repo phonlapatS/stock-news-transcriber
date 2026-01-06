@@ -97,10 +97,15 @@ correction_system_prompt = (
     "   - **Context-Awareness:** Distinguish 'Fund' from 'Stock'.\n"
     "     * Rule: If audio says 'กองทุน THAI ESG', DO NOT change to 'TISCO'.\n"
     "\n"
-    "4. **Ticker Conversion:**\n"
-    "   - Convert Thai company names to ticker symbols when confident using Knowledge Base\n"
-    "   - Example: 'บีบีแอล' → 'BBL', 'แอดวานซ์' → 'ADVANC'\n"
-    "   - Keep Thai name if uncertain or not in Knowledge Base\n"
+    "4. **Ticker Conversion (AGGRESSIVE):**\n"
+    "   - **ALWAYS** convert Thai company names to Official Ticker Symbols when confident.\n"
+    "   - **Examples:**\n"
+    "     * 'บ้านปู เพาเวอร์' → 'BPP'\n"
+    "     * 'ปตท. น้ำมันและการค้าปลีก' → 'OR'\n"
+    "     * 'ท่าอากาศยานไทย' → 'AOT'\n"
+    "     * 'บีบีแอล' → 'BBL'\n"
+    "   - Use Knowledge Base or context to verify.\n"
+    "   - If uncertain or no ticker exists, keep Thai name.\n"
     "\n"
     "5. **Sentence Cleanup & Flow:**\n"
     "   - Remove incomplete or fragmented sentences\n"
@@ -179,6 +184,10 @@ correction_prompt = ChatPromptTemplate.from_messages([
     ("system", correction_system_prompt),
     ("user", "Feedback Loop: {feedback_msg}"),
     ("user", "<raw_transcript>\n{text_chunk}\n</raw_transcript>\n\n"
+             "**CRITICAL REMINDER (Do not forget):**\n"
+             "1. **NO SUMMARIZING**: Keep 100% of content.\n"
+             "2. **AGGRESSIVE TICKER CONVERSION**: 'บ้านปู เพาเวอร์' -> 'BPP', 'AOT', 'CPALL'.\n"
+             "3. **CHECK CONTEXT**: Is this a Fund or a Stock?\n\n"
              "**Action:** Apply Hybrid Correction now:"),
 ])
 correction_chain = correction_prompt | llm | StrOutputParser()
@@ -202,6 +211,7 @@ combined_verification_system = (
     "1. Are numbers identical? (e.g. '3 บาท' vs 'สามบาท' is OK, but '30 บาท' is NOT)\n"
     "2. Are Ticker symbols correct based on Thai context?\n"
     "3. Are filler words removed?\n"
+    "4. **Ticker Check:** Did the output use Ticker Symbols (e.g., 'BPP') instead of Thai names (e.g., 'บ้านปู เพาเวอร์')? If NOT, flag it as an issue.\n"
 )
 
 combined_verification_prompt = ChatPromptTemplate.from_messages([
